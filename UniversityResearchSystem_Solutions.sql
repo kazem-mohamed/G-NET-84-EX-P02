@@ -1,14 +1,14 @@
 /*
-  University Research System database assignment
-  Dialect: Microsoft SQL Server (T-SQL)
-  Source schema: UniversityResearchSystem.bak
+  University Research System — assignment answers
+  SQL Server (T-SQL), based on UniversityResearchSystem.bak
 
-  Run the query sections in the restored assignment database. DDL sections
-  create the requested objects. The sample transaction is parameterized and
-  deliberately not executed by this script because it inserts business data.
+  Run this file in the restored assignment database. It contains both query
+  answers and the requested database objects. CreateFundedProject is defined
+  here but not called, so the file won't add sample project data.
 */
 
-/* Q1. Researchers and their projects, retaining researchers with no project. */
+/* Q1. Show each researcher and any project they're assigned to. The LEFT JOINs
+   keep researchers who aren't assigned to a project. */
 SELECT r.Id AS ResearcherId,
        CONCAT_WS(' ', r.FirstName, r.MiddleName, r.LastName) AS ResearcherName,
        p.Id AS ProjectId,
@@ -19,7 +19,7 @@ LEFT JOIN dbo.ResearchProject AS p ON p.Id = w.ProjectId
 ORDER BY r.LastName, r.FirstName, r.Id, p.Id;
 GO
 
-/* Q2. Projects that have at least one grant allocation. */
+/* Q2. Return funded projects with the lead researcher's name and email. */
 SELECT p.Id AS ProjectId, p.Title,
        CONCAT_WS(' ', r.FirstName, r.MiddleName, r.LastName) AS LeadResearcher,
        r.Email
@@ -29,18 +29,17 @@ WHERE EXISTS (SELECT 1 FROM dbo.Funds AS f WHERE f.ProjectId = p.Id)
 ORDER BY p.Id;
 GO
 
-/* Q3. Cartesian product: every researcher paired with every publication. */
+/* Q3. CROSS JOIN pairs every researcher with every publication. */
 SELECT r.Id AS ResearcherId,
        CONCAT_WS(' ', r.FirstName, r.MiddleName, r.LastName) AS ResearcherName,
        p.Id AS PublicationId, p.Title AS PublicationTitle
 FROM dbo.Researcher AS r
 CROSS JOIN dbo.Publication AS p;
 GO
-/* Q3 explanation: row count = researchers × publications; this can explode,
-   wastes CPU/network, and invents researcher-publication associations. Use
-   Publishes for actual authorship relationships. */
+/* On the supplied database this returns 10,000 pairs. It doesn't show who
+   actually wrote what; Publishes holds those authorship links. */
 
-/* Q4. Supervisors and the people they supervise. */
+/* Q4. The aliases make it clear who supervises whom. */
 SELECT sup.Id AS SupervisorId,
        CONCAT_WS(' ', sup.FirstName, sup.MiddleName, sup.LastName) AS SupervisorName,
        sub.Id AS SupervisedId,
@@ -52,7 +51,7 @@ JOIN dbo.Researcher AS sub ON sub.Id = s.SupervisedId
 ORDER BY sup.LastName, sub.LastName, s.SupervisionStartDate;
 GO
 
-/* Q5. Published researchers not working on an active project. */
+/* Q5. Find researchers with publications and no active project assignment. */
 SELECT r.Id AS ResearcherId,
        CONCAT_WS(' ', r.FirstName, r.MiddleName, r.LastName) AS ResearcherName
 FROM dbo.Researcher AS r
@@ -65,25 +64,25 @@ WHERE EXISTS (SELECT 1 FROM dbo.Publishes AS pa WHERE pa.ResearcherId = r.Id)
 ORDER BY r.LastName, r.FirstName, r.Id;
 GO
 
-/* Q6. Top five citation positions, including ties at position five. */
+/* Q6. WITH TIES keeps every publication tied with the fifth citation count. */
 SELECT TOP (5) WITH TIES Id AS PublicationId, Title, Type, CitationCount
 FROM dbo.Publication
 ORDER BY CitationCount DESC;
 GO
 
-/* Q7. Second page, 10 researchers per page; Id makes paging deterministic. */
+/* Q7. Skip the first ten researchers, then return the next ten. Id breaks ties. */
 SELECT Id, FirstName, MiddleName, LastName, Email, DateOfBirth, Building, RoomNumber
 FROM dbo.Researcher
 ORDER BY LastName, FirstName, Id
 OFFSET 10 ROWS FETCH NEXT 10 ROWS ONLY;
 GO
 
-/* Q8. Both statements request the first three rows in LastName order, but
-   tied last names can make the selected rows differ unless a unique tie-breaker
-   is added. OFFSET-FETCH supports page numbers/page sizes; TOP also supports
-   PERCENT and WITH TIES and works in more query contexts. */
+/* Q8. Both statements ask for the first three rows by LastName. If last names
+   tie, either query can choose a different row unless you add a unique
+   tie-breaker. OFFSET-FETCH is handy for paging; TOP also supports PERCENT and
+   WITH TIES. */
 
-/* Q9. Unique index within each building, oldest birth date first. */
+/* Q9. Number researchers separately within each building, oldest first. */
 SELECT Id AS ResearcherId, FirstName, LastName, Building, DateOfBirth,
        ROW_NUMBER() OVER
          (PARTITION BY Building ORDER BY DateOfBirth, Id) AS BuildingIndex
@@ -91,7 +90,7 @@ FROM dbo.Researcher
 ORDER BY Building, DateOfBirth, Id;
 GO
 
-/* Q10. Rank by citations within publication type; ties share a rank. */
+/* Q10. Rank by citation count inside each publication type. Ties share a rank. */
 SELECT Title, Type, CitationCount,
        RANK() OVER
          (PARTITION BY Type ORDER BY CitationCount DESC) AS PublicationRank
@@ -99,17 +98,17 @@ FROM dbo.Publication
 ORDER BY Type, PublicationRank, Title;
 GO
 
-/* Q11. Budget ranking within each status (RANK has gaps; DENSE_RANK has none). */
+/* Q11. Show both ranking styles so the gaps are easy to compare. */
 SELECT Id AS ProjectId, Title, Status, Budget,
        RANK() OVER (PARTITION BY Status ORDER BY Budget DESC) AS RankWithGaps,
        DENSE_RANK() OVER (PARTITION BY Status ORDER BY Budget DESC) AS RankWithoutGaps
 FROM dbo.ResearchProject
 ORDER BY Status, Budget DESC, Id;
 GO
-/* If two projects tie at rank 1, RANK assigns the next row 3; DENSE_RANK
-   assigns it 2. */
+/* For example, if two projects tie at 1, RANK gives the next project 3;
+   DENSE_RANK gives it 2. */
 
-/* Q12. Count all researchers' publications (zero included), then split into 4. */
+/* Q12. Count publications first so researchers with none still get a group. */
 WITH PublicationCounts AS
 (
     SELECT r.Id AS ResearcherId, r.FirstName, r.MiddleName, r.LastName,
@@ -125,18 +124,20 @@ FROM PublicationCounts
 ORDER BY GroupNumber, PublicationCount DESC, ResearcherId;
 GO
 
-/* Q13. Logical processing order: FROM/JOIN, WHERE, GROUP BY, HAVING, SELECT,
-   ORDER BY, then TOP or OFFSET-FETCH row limiting. */
+/* Q13. SQL Server processes these clauses in this order:
+   FROM/JOIN, WHERE, GROUP BY, HAVING, SELECT, ORDER BY, then row limiting
+   with TOP or OFFSET-FETCH. */
 
-/* Q14. Aggregate aliases are unavailable to WHERE and aggregates are filtered
-   with HAVING, after grouping. */
+/* Q14. WHERE runs before grouping, so it can't filter ProjectCount. Use HAVING
+   to test the aggregate after each researcher has been grouped. */
 SELECT ResearcherId, COUNT(*) AS ProjectCount
 FROM dbo.WorksOn
 GROUP BY ResearcherId
 HAVING COUNT(*) > 2;
 GO
 
-/* Q15. Name, lowercase email, and age as of today. */
+/* Q15. Build the name, lowercase the email, and adjust age if the birthday
+   hasn't happened yet this year. */
 SELECT CONCAT_WS(' ', FirstName, MiddleName, LastName) AS FullName,
        LOWER(Email) AS EmailLowercase,
        DATEDIFF(YEAR, DateOfBirth, CONVERT(date, GETDATE()))
@@ -146,7 +147,7 @@ SELECT CONCAT_WS(' ', FirstName, MiddleName, LastName) AS FullName,
 FROM dbo.Researcher;
 GO
 
-/* Q16. Duration in days and start month/year. */
+/* Q16. Use today's date for projects that don't have an EndDate yet. */
 SELECT Id AS ProjectId, Title, StartDate, EndDate,
        DATEDIFF(DAY, StartDate, COALESCE(EndDate, CONVERT(date, GETDATE()))) AS DurationDays,
        MONTH(StartDate) AS StartMonth,
@@ -154,21 +155,21 @@ SELECT Id AS ProjectId, Title, StartDate, EndDate,
 FROM dbo.ResearchProject;
 GO
 
-/* Q17. Exact email domain match. */
+/* Q17. Compare the part of the email after @ with the requested domain. */
 SELECT Id AS ResearcherId, FirstName, LastName, Email
 FROM dbo.Researcher
 WHERE LOWER(SUBSTRING(Email, CHARINDEX('@', Email) + 1, 255)) = 'university.edu'
   AND CHARINDEX('@', Email) > 0;
 GO
 
-/* Q18. Replace missing optional values. */
+/* Q18. Show N/A for the two optional fields when they're NULL. */
 SELECT Id, FirstName, COALESCE(MiddleName, 'N/A') AS MiddleName, LastName,
        Email, DateOfBirth, Building,
        COALESCE(RoomNumber, 'N/A') AS RoomNumber
 FROM dbo.Researcher;
 GO
 
-/* Q19. Budget bands; NULL budgets are explicitly marked Unknown. */
+/* Q19. NULL budgets don't fit a band, so label them Unknown. */
 SELECT Id AS ProjectId, Title, Budget,
        CASE WHEN Budget IS NULL THEN 'Unknown'
             WHEN Budget < 50000 THEN 'Small'
@@ -177,7 +178,7 @@ SELECT Id AS ProjectId, Title, Budget,
 FROM dbo.ResearchProject;
 GO
 
-/* Q20. Total budgets for researchers who lead projects. */
+/* Q20. Sum the budgets of projects led by each researcher. */
 SELECT r.Id AS ResearcherId,
        CONCAT_WS(' ', r.FirstName, r.MiddleName, r.LastName) AS ResearcherName,
        SUM(p.Budget) AS TotalBudgetManaged
@@ -187,7 +188,7 @@ GROUP BY r.Id, r.FirstName, r.MiddleName, r.LastName
 ORDER BY ResearcherName;
 GO
 
-/* Q21. Buildings with more than three researchers. */
+/* Q21. Keep only buildings with at least four researchers. */
 SELECT COALESCE(Building, 'N/A') AS Building, COUNT(*) AS ResearcherCount
 FROM dbo.Researcher
 GROUP BY Building
@@ -195,7 +196,7 @@ HAVING COUNT(*) > 3
 ORDER BY ResearcherCount DESC, Building;
 GO
 
-/* Q22. Citation aggregates by type; AVG/SUM ignore NULL citation counts. */
+/* Q22. AVG and SUM skip NULL citation counts; COUNT still counts every paper. */
 SELECT Type, AVG(CAST(CitationCount AS decimal(12,2))) AS AverageCitationCount,
        SUM(CitationCount) AS TotalCitations, COUNT(*) AS PublicationCount
 FROM dbo.Publication
@@ -204,7 +205,7 @@ HAVING AVG(CAST(CitationCount AS decimal(12,2))) > 50
 ORDER BY Type;
 GO
 
-/* Q23. More than two distinct projects and over 60 committed hours. */
+/* Q23. Apply both thresholds to each researcher's assignments. */
 SELECT ResearcherId, COUNT(DISTINCT ProjectId) AS ProjectCount,
        SUM(HoursPerWeek) AS TotalHoursPerWeek
 FROM dbo.WorksOn
@@ -213,15 +214,15 @@ HAVING COUNT(DISTINCT ProjectId) > 2
    AND SUM(HoursPerWeek) > 60;
 GO
 
-/* Q24. Projects over the average non-NULL budget. */
+/* Q24. AVG ignores NULL budgets, as required for the comparison. */
 SELECT Id AS ProjectId, Title, Budget
 FROM dbo.ResearchProject
 WHERE Budget > (SELECT AVG(Budget) FROM dbo.ResearchProject)
 ORDER BY Budget DESC, Id;
 GO
 
-/* Q25. Publication count above the average count in the same building.
-   Researchers with zero publications are included in each building average. */
+/* Q25. The LEFT JOIN counts researchers with no publications as zero. Compare
+   each count with the average for that building. */
 WITH PublicationCounts AS
 (
     SELECT r.Id AS ResearcherId, r.Building, COUNT(pa.PublicationId) AS PublicationCount
@@ -240,26 +241,27 @@ WHERE pc.PublicationCount >
 ORDER BY pc.Building, pc.PublicationCount DESC, pc.ResearcherId;
 GO
 
-/* Q26. Researchers supervising at least one other researcher. */
+/* Q26. EXISTS returns each supervisor once, even if they supervise several people. */
 SELECT r.Id AS ResearcherId, r.FirstName, r.LastName
 FROM dbo.Researcher AS r
 WHERE EXISTS (SELECT 1 FROM dbo.Supervises AS s WHERE s.SupervisorId = r.Id);
 GO
 
-/* Q27. Each project with a correlated count of assigned researchers. */
+/* Q27. The subquery counts assignments for the current project. */
 SELECT p.Id AS ProjectId, p.Title,
        (SELECT COUNT(*) FROM dbo.WorksOn AS w WHERE w.ProjectId = p.Id) AS ResearcherCount
 FROM dbo.ResearchProject AS p
 ORDER BY p.Id;
 GO
 
-/* Q28. Second-highest distinct, non-NULL project budget; no ranking/paging. */
+/* Q28. Find the greatest budget below the maximum: the second-highest distinct
+   value, without ranking functions or OFFSET-FETCH. */
 SELECT MAX(Budget) AS SecondHighestDistinctBudget
 FROM dbo.ResearchProject
 WHERE Budget < (SELECT MAX(Budget) FROM dbo.ResearchProject);
 GO
 
-/* Q29. Researchers involved in projects who have authored no publications. */
+/* Q29. Keep researchers with a project assignment and no Publishes rows. */
 SELECT r.Id AS ResearcherId, r.FirstName, r.LastName
 FROM dbo.Researcher AS r
 WHERE EXISTS (SELECT 1 FROM dbo.WorksOn AS w WHERE w.ResearcherId = r.Id)
@@ -267,7 +269,7 @@ WHERE EXISTS (SELECT 1 FROM dbo.WorksOn AS w WHERE w.ResearcherId = r.Id)
 ORDER BY r.LastName, r.Id;
 GO
 
-/* Q30. Researchers who supervise others and lead one or more projects. */
+/* Q30. Both EXISTS checks must succeed for the same researcher. */
 SELECT r.Id AS ResearcherId,
        CONCAT_WS(' ', r.FirstName, r.MiddleName, r.LastName) AS ResearcherName
 FROM dbo.Researcher AS r
@@ -276,7 +278,7 @@ WHERE EXISTS (SELECT 1 FROM dbo.Supervises AS s WHERE s.SupervisorId = r.Id)
 ORDER BY r.LastName, r.Id;
 GO
 
-/* Q31. Function returning project days from StartDate to EndDate or today. */
+/* Q31. Return the number of days through EndDate, or today if the project is open. */
 CREATE OR ALTER FUNCTION dbo.ufn_ProjectActiveDays
 (
     @ProjectId varchar(10)
@@ -292,7 +294,7 @@ BEGIN
 END;
 GO
 
-/* Q32. Inline table-valued function: projects, role, and weekly hours. */
+/* Q32. Return the projects this researcher works on with their role and hours. */
 CREATE OR ALTER FUNCTION dbo.ufn_ResearcherProjects
 (
     @ResearcherId varchar(10)
@@ -308,10 +310,9 @@ RETURN
 );
 GO
 
-/* Q33. Aggregate summary; a multi-statement TVF suits the required
-   output-table construction / branching use cases, but an inline TVF is
-   preferable for simple single-query logic because it can be optimized with
-   the caller (MSTVF may have weaker cardinality estimates). */
+/* Q33. A multi-statement TVF is useful when the result takes several steps or
+   needs branching and intermediate work. For a single SELECT, an inline TVF is
+   usually easier for the optimizer to fold into the caller's query. */
 CREATE OR ALTER FUNCTION dbo.ufn_ResearcherStatistics
 (
     @ResearcherId varchar(10)
@@ -340,7 +341,7 @@ BEGIN
 END;
 GO
 
-/* Q34. Search index on project status and start date. */
+/* Q34. This key order supports searches by status followed by start date. */
 IF NOT EXISTS
    (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.ResearchProject')
      AND name = N'IX_ResearchProject_Status_StartDate')
@@ -348,13 +349,13 @@ IF NOT EXISTS
         ON dbo.ResearchProject (Status, StartDate DESC)
         INCLUDE (Id, Title);
 GO
-/* Q35. A table can have one clustered index (or be a heap). A clustered
-   index stores the table rows in key order; a nonclustered index stores a
-   separate key/row-locator structure. Adding a clustered index to a heap
-   reorganizes the rows and rebuilds nonclustered row locators from heap RIDs
-   to clustered keys; the existing nonclustered indexes remain. */
+/* Q35. A table has at most one clustered index; without one, it's a heap.
+   The clustered index stores the rows by its key. Nonclustered indexes store
+   separate keys and row locators. Creating a clustered index on a heap
+   reorganizes the rows and rebuilds nonclustered indexes to use the clustered
+   key instead of heap row IDs; the nonclustered indexes aren't removed. */
 
-/* Q36. Cover Email searches that return FirstName and LastName. */
+/* Q36. Email is the search key; the INCLUDE columns cover the requested output. */
 IF NOT EXISTS
    (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.Researcher')
      AND name = N'IX_Researcher_Email_Cover')
@@ -362,10 +363,10 @@ IF NOT EXISTS
         ON dbo.Researcher (Email)
         INCLUDE (FirstName, LastName);
 GO
-/* A covering index contains all search and output columns, so SQL Server can
-   answer this lookup from the index without a base-table key lookup. */
+/* Because the index has Email, FirstName, and LastName, SQL Server can answer
+   this lookup without going back to the table for the names. */
 
-/* Q37. Active-project summary. */
+/* Q37. One row per active project, including projects with no team assignments. */
 CREATE OR ALTER VIEW dbo.ActiveProjectSummary
 AS
     SELECT p.Id AS ProjectId, p.Title AS ProjectTitle,
@@ -385,9 +386,24 @@ AS
     WHERE p.Status = 'Active';
 GO
 
-/* Q38. Indexed view with a row for every researcher, including zero-publication
-   researchers. SQL Server indexed views disallow outer joins, so this small
-   summary source table is maintained transactionally by the triggers below. */
+/* Q38. The indexed view needs to include researchers with zero publications.
+   SQL Server won't allow an outer join in an indexed view, so a small helper
+   table stores one row per researcher. The triggers below keep it current. */
+SET ANSI_NULLS ON;
+SET QUOTED_IDENTIFIER ON;
+SET ANSI_PADDING ON;
+SET ANSI_WARNINGS ON;
+SET CONCAT_NULL_YIELDS_NULL ON;
+SET ARITHABORT ON;
+SET NUMERIC_ROUNDABORT OFF;
+GO
+IF OBJECT_ID(N'dbo.ResearcherPublicationStats', N'V') IS NOT NULL
+   AND EXISTS
+       (SELECT 1 FROM sys.indexes
+        WHERE object_id = OBJECT_ID(N'dbo.ResearcherPublicationStats')
+          AND name = N'UX_ResearcherPublicationStats')
+    DROP INDEX UX_ResearcherPublicationStats ON dbo.ResearcherPublicationStats;
+GO
 IF OBJECT_ID(N'dbo.ResearcherPublicationStatSource', N'U') IS NULL
 BEGIN
     CREATE TABLE dbo.ResearcherPublicationStatSource
@@ -479,17 +495,6 @@ BEGIN
 END;
 GO
 
-SET ANSI_NULLS ON;
-SET QUOTED_IDENTIFIER ON;
-SET ANSI_PADDING ON;
-SET ANSI_WARNINGS ON;
-SET CONCAT_NULL_YIELDS_NULL ON;
-SET ARITHABORT ON;
-SET NUMERIC_ROUNDABORT OFF;
-GO
-DROP INDEX IF EXISTS UX_ResearcherPublicationStats
-    ON dbo.ResearcherPublicationStats;
-GO
 CREATE OR ALTER VIEW dbo.ResearcherPublicationStats
 WITH SCHEMABINDING
 AS
@@ -499,17 +504,17 @@ GO
 CREATE UNIQUE CLUSTERED INDEX UX_ResearcherPublicationStats
     ON dbo.ResearcherPublicationStats (ResearcherId);
 GO
-/* Q39. Indexed-view requirements: schema binding; two-part base object names; a
-   unique clustered index first; COUNT_BIG for grouped aggregates; deterministic
-   expressions; required SET options; and supported view syntax (no outer
-   joins, TOP, DISTINCT, subqueries, or UNION). The Q38 source table and triggers
-   provide zero-count rows that an indexed view cannot produce with an outer
-   join. The indexed view stores a clustered copy of that summary for reads;
-   the tradeoff is source-table storage and trigger work on researcher/authorship
-   writes. Prefer this for frequent reads when the write overhead is acceptable;
-   use a regular view when you don't want a separately maintained summary. */
+/* Q39. An indexed view needs SCHEMABINDING and a unique clustered index before
+   any other index. Grouped views also need COUNT_BIG(*). Its expressions must
+   be deterministic, the required SET options must be on, and features such as
+   outer joins, TOP, DISTINCT, subqueries, and UNION aren't allowed.
 
-/* Q40. Add a researcher to a project with validation and return codes. */
+   This view reads the Q38 summary table, whose triggers include researchers
+   with zero publications. The index makes repeated reads fast, but every
+   authorship or researcher change also updates the summary and indexed view.
+   Use a regular view when that write cost or extra stored data isn't worthwhile. */
+
+/* Q40. Validate both IDs and reject duplicate assignments before inserting. */
 CREATE OR ALTER PROCEDURE dbo.AddResearcherToProject
     @ResearcherId varchar(10),
     @ProjectId varchar(10),
@@ -547,7 +552,7 @@ BEGIN
 END;
 GO
 
-/* Q41. Change Pending to Active only if assigned researchers and a grant exist. */
+/* Q41. Only activate a pending project after it has a team member and funding. */
 CREATE OR ALTER PROCEDURE dbo.UpdateProjectStatus
     @ProjectId varchar(10)
 AS
@@ -574,7 +579,7 @@ BEGIN
 END;
 GO
 
-/* Q42. Output counts for a researcher. */
+/* Q42. Return project count, publication count, and weekly hours through OUTPUTs. */
 CREATE OR ALTER PROCEDURE dbo.GetResearcherWorkSummary
     @ResearcherId varchar(10),
     @TotalProjects int OUTPUT,
@@ -590,7 +595,7 @@ BEGIN
 END;
 GO
 
-/* Q43. Reject an insert that leaves any affected researcher on > 5 projects. */
+/* Q43. Check every researcher touched by a multi-row insert. */
 CREATE OR ALTER TRIGGER dbo.trg_WorksOn_MaxFiveProjects
 ON dbo.WorksOn
 AFTER INSERT
@@ -610,7 +615,8 @@ BEGIN
 END;
 GO
 
-/* Q44. AFTER trigger: evaluate the committed EndDate and then update Status. */
+/* Q44. AFTER is appropriate here: the EndDate has been saved when the trigger
+   checks it. The status update won't loop because EndDate hasn't changed. */
 CREATE OR ALTER TRIGGER dbo.trg_ResearchProject_CompletePastEndDate
 ON dbo.ResearchProject
 AFTER INSERT, UPDATE
@@ -630,7 +636,7 @@ GO
 /* AFTER is appropriate because the row must first be written so the trigger
    can inspect its actual EndDate; the second UPDATE marks it completed. */
 
-/* Q45. Audit old/new amounts for every Grants row updated. */
+/* Q45. Keep one audit row for each Grants row changed, including multi-row updates. */
 IF OBJECT_ID(N'dbo.GrantAudit', N'U') IS NULL
 BEGIN
     CREATE TABLE dbo.GrantAudit
@@ -658,8 +664,8 @@ BEGIN
 END;
 GO
 
-/* Q46. Atomic project + leader assignment + grant allocation.
-   Execute by calling the procedure with valid, unused IDs and an existing grant. */
+/* Q46. All three inserts share one transaction. Call the procedure with unused
+   project details and an existing researcher and grant. */
 CREATE OR ALTER PROCEDURE dbo.CreateFundedProject
     @ProjectId varchar(10),
     @Title varchar(200),
@@ -702,14 +708,13 @@ BEGIN
     END CATCH;
 END;
 GO
-/* Q47. ACID: Atomicity means all three inserts above commit or none do;
-   Consistency preserves foreign keys and project rules; Isolation prevents
-   another session observing a partially-created project; Durability means a
-   committed project, assignment, and funding allocation survive a restart. */
+/* Q47. In this example, atomicity means the project, assignment, and funding
+   either all save or none do. Consistency preserves their foreign keys.
+   Isolation keeps other sessions from seeing only part of the setup.
+   Durability means the committed records remain after a restart. */
 
-/* Q48. IN and EXISTS are commonly optimized as equivalent semi-joins. Neither
-   is universally faster; indexes, uniqueness, selectivity, row counts,
-   statistics, and the chosen execution plan determine performance. */
+/* Q48. SQL Server often turns both forms into a semi-join, so neither is
+   automatically faster. Indexes, row counts, and the actual plan matter. */
 -- Query A
 SELECT r.*
 FROM dbo.Researcher AS r
@@ -722,14 +727,15 @@ FROM dbo.Researcher AS r
 WHERE EXISTS (SELECT 1 FROM dbo.WorksOn AS w
               WHERE w.ResearcherId = r.Id AND w.ProjectId = 'P001');
 GO
-/* Q49. Useful indexes / checks for the slow active-project query:
-   1) ResearchProject(Status, StartDate DESC) INCLUDE (Id, Title).
-   2) WorksOn(ProjectId, ResearcherId) to support the project-to-team join.
-   3) Researcher.Id is already the clustered primary key, so its row lookup
-      returns FirstName/LastName without another covering index.
-   4) Refresh statistics and inspect the actual execution plan / logical reads.
-   The WHERE predicate on p.Status does not remove projects without a team, so
-   retain LEFT JOIN if those projects must remain in the output. */
+/* Q49. A few ways to help this query:
+   - The ResearchProject index from Q34 filters active projects and orders them
+     by StartDate while covering Id and Title.
+   - The WorksOn index below helps find team members for each project.
+   - Researcher.Id is already the clustered key, so another name index would
+     add little for this lookup.
+   - After large data changes, update statistics and check the actual plan and
+     logical reads.
+   Keep the LEFT JOINs if projects without team members should still appear. */
 IF NOT EXISTS
    (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.WorksOn')
      AND name = N'IX_WorksOn_ProjectId_ResearcherId')
@@ -737,19 +743,14 @@ IF NOT EXISTS
         ON dbo.WorksOn (ProjectId, ResearcherId);
 GO
 
-/* Q50. For repeated Top-10 cited publications with authors:
-   A) Repeated query: simplest/fresh data, but duplicated text and no shared
-      interface.
-   B) View: reusable and current, but does not store results; ORDER BY/TOP
-      belongs in the consuming query and an indexed view cannot use TOP.
-   C) Stored procedure: reusable, parameterizable, plan-cache friendly, and
-      can return authors; result remains current, with execution permission
-      control.
-   D) Indexed view: can speed supported materialized aggregates, but this
-      author join/top-10 ordering is not an indexed-view shape and every write
-      carries maintenance cost.
-   Choose a stored procedure for a stable reusable Top-10 query with authors;
-   support it with a citation index and an authorship index. */
+/* Q50. A query is quickest to start with, but its text gets repeated.
+   A view gives one reusable definition and always reads current data, but the
+   caller still has to sort and limit the results. A stored procedure gives
+   callers one reusable entry point and can return the authors with each paper.
+   An indexed view stores results for faster reads, but this top-10 query and
+   author join don't fit indexed-view restrictions, and maintaining it adds
+   write cost. I'd use a stored procedure here, backed by citation and
+   authorship indexes. */
 CREATE OR ALTER PROCEDURE dbo.GetTopCitedPublications
 AS
 BEGIN
