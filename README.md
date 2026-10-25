@@ -11,7 +11,7 @@ The executable answer key is [UniversityResearchSystem_Solutions.sql](University
 - Main relationships used by the answers: ResearchProject.LeaderId -> Researcher.Id; WorksOn links researchers to projects; Publishes links researchers to publications; Funds links projects to grants; Supervises is a researcher-to-researcher relationship.
 - The restored backup contains 100 researchers, 101 research projects, 102 WorksOn rows, 100 publications, 133 Publishes rows, 100 grants, and 101 Funds rows.
 
-The full schema uses Researcher.Id, ResearchProject.Id, and Publication.Id as keys. ResearchProject.Budget, Status, and EndDate, Researcher.MiddleName, Building, and RoomNumber, WorksOn.Role and HoursPerWeek, and Publication.CitationCount can be NULL. The query answers account for those nullable columns where relevant.
+The full schema uses Researcher.Id, ResearchProject.Id, and Publication.Id as keys. ResearchProject.Budget, Status, and EndDate, Researcher.MiddleName, Building, and RoomNumber, WorksOn.Role and HoursPerWeek, and Publication.CitationCount can be NULL. The query answers account for those nullable columns where relevant. Q38 includes every researcher, including those with zero publications; trigger-maintained summary rows let the indexed view avoid an unsupported outer join.
 
 ## Running the solution
 

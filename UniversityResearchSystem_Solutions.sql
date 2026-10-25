@@ -385,15 +385,100 @@ AS
     WHERE p.Status = 'Active';
 GO
 
-/* Q38. Indexed publication-count view. Indexed views cannot use an outer join,
-   so researchers with zero publications do not have a row in this view. SQL
-   Server also disallows a select-list expression over grouped columns here;
-   the deterministic persisted name column lets the indexed view group by and
-   return the requested full name. */
-IF COL_LENGTH(N'dbo.Researcher', N'ResearcherFullName') IS NULL
-    ALTER TABLE dbo.Researcher ADD ResearcherFullName AS
-        CONVERT(varchar(152), FirstName + ' ' + COALESCE(MiddleName + ' ', '') + LastName) PERSISTED;
+/* Q38. Indexed view with a row for every researcher, including zero-publication
+   researchers. SQL Server indexed views disallow outer joins, so this small
+   summary source table is maintained transactionally by the triggers below. */
+IF OBJECT_ID(N'dbo.ResearcherPublicationStatSource', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.ResearcherPublicationStatSource
+    (
+        ResearcherId varchar(10) NOT NULL
+            CONSTRAINT PK_ResearcherPublicationStatSource PRIMARY KEY,
+        ResearcherName varchar(152) NOT NULL,
+        TotalPublications bigint NOT NULL,
+        CONSTRAINT FK_ResearcherPublicationStatSource_Researcher
+            FOREIGN KEY (ResearcherId) REFERENCES dbo.Researcher(Id) ON DELETE CASCADE
+    );
+END;
 GO
+
+UPDATE stat
+SET ResearcherName = CONCAT_WS(' ', r.FirstName, r.MiddleName, r.LastName),
+    TotalPublications = counts.TotalPublications
+FROM dbo.ResearcherPublicationStatSource AS stat
+JOIN dbo.Researcher AS r ON r.Id = stat.ResearcherId
+CROSS APPLY
+(
+    SELECT COUNT_BIG(*) AS TotalPublications
+    FROM dbo.Publishes AS pa
+    WHERE pa.ResearcherId = r.Id
+) AS counts;
+
+INSERT dbo.ResearcherPublicationStatSource
+    (ResearcherId, ResearcherName, TotalPublications)
+SELECT r.Id, CONCAT_WS(' ', r.FirstName, r.MiddleName, r.LastName),
+       counts.TotalPublications
+FROM dbo.Researcher AS r
+CROSS APPLY
+(
+    SELECT COUNT_BIG(*) AS TotalPublications
+    FROM dbo.Publishes AS pa
+    WHERE pa.ResearcherId = r.Id
+) AS counts
+WHERE NOT EXISTS
+      (SELECT 1 FROM dbo.ResearcherPublicationStatSource AS stat
+       WHERE stat.ResearcherId = r.Id);
+GO
+
+CREATE OR ALTER TRIGGER dbo.trg_ResearcherPublicationStatSource_Researcher
+ON dbo.Researcher
+AFTER INSERT, UPDATE
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    UPDATE stat
+       SET ResearcherName = CONCAT_WS(' ', i.FirstName, i.MiddleName, i.LastName)
+    FROM dbo.ResearcherPublicationStatSource AS stat
+    JOIN inserted AS i ON i.Id = stat.ResearcherId;
+
+    INSERT dbo.ResearcherPublicationStatSource
+        (ResearcherId, ResearcherName, TotalPublications)
+    SELECT i.Id, CONCAT_WS(' ', i.FirstName, i.MiddleName, i.LastName), 0
+    FROM inserted AS i
+    WHERE NOT EXISTS
+          (SELECT 1 FROM dbo.ResearcherPublicationStatSource AS stat
+           WHERE stat.ResearcherId = i.Id);
+END;
+GO
+
+CREATE OR ALTER TRIGGER dbo.trg_ResearcherPublicationStatSource_Publishes
+ON dbo.Publishes
+AFTER INSERT, UPDATE, DELETE
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    ;WITH AffectedResearchers AS
+    (
+        SELECT ResearcherId FROM inserted
+        UNION
+        SELECT ResearcherId FROM deleted
+    )
+    UPDATE stat
+       SET TotalPublications = counts.TotalPublications
+    FROM dbo.ResearcherPublicationStatSource AS stat
+    JOIN AffectedResearchers AS affected
+      ON affected.ResearcherId = stat.ResearcherId
+    CROSS APPLY
+    (
+        SELECT COUNT_BIG(*) AS TotalPublications
+        FROM dbo.Publishes AS pa
+        WHERE pa.ResearcherId = stat.ResearcherId
+    ) AS counts;
+END;
+GO
+
 SET ANSI_NULLS ON;
 SET QUOTED_IDENTIFIER ON;
 SET ANSI_PADDING ON;
@@ -402,30 +487,27 @@ SET CONCAT_NULL_YIELDS_NULL ON;
 SET ARITHABORT ON;
 SET NUMERIC_ROUNDABORT OFF;
 GO
+DROP INDEX IF EXISTS UX_ResearcherPublicationStats
+    ON dbo.ResearcherPublicationStats;
+GO
 CREATE OR ALTER VIEW dbo.ResearcherPublicationStats
 WITH SCHEMABINDING
 AS
-    SELECT r.Id AS ResearcherId,
-           r.ResearcherFullName AS ResearcherName,
-           COUNT_BIG(*) AS TotalPublications
-    FROM dbo.Researcher AS r
-    JOIN dbo.Publishes AS pa ON pa.ResearcherId = r.Id
-    GROUP BY r.Id, r.ResearcherFullName;
+    SELECT stat.ResearcherId, stat.ResearcherName, stat.TotalPublications
+    FROM dbo.ResearcherPublicationStatSource AS stat;
 GO
-IF NOT EXISTS
-   (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.ResearcherPublicationStats')
-     AND name = N'UX_ResearcherPublicationStats')
-    CREATE UNIQUE CLUSTERED INDEX UX_ResearcherPublicationStats
-        ON dbo.ResearcherPublicationStats (ResearcherId);
+CREATE UNIQUE CLUSTERED INDEX UX_ResearcherPublicationStats
+    ON dbo.ResearcherPublicationStats (ResearcherId);
 GO
 /* Q39. Indexed-view requirements: schema binding; two-part base object names; a
    unique clustered index first; COUNT_BIG for grouped aggregates; deterministic
    expressions; required SET options; and supported view syntax (no outer
-   joins, TOP, DISTINCT, subqueries, or UNION). It stores and maintains results,
-   speeding repeated reads at the cost of storage and write overhead. Prefer it
-   for frequent, expensive aggregates over a regular view when update cost is
-   acceptable; use a table when independently managed / refreshed data is
-   required. */
+   joins, TOP, DISTINCT, subqueries, or UNION). The Q38 source table and triggers
+   provide zero-count rows that an indexed view cannot produce with an outer
+   join. The indexed view stores a clustered copy of that summary for reads;
+   the tradeoff is source-table storage and trigger work on researcher/authorship
+   writes. Prefer this for frequent reads when the write overhead is acceptable;
+   use a regular view when you don't want a separately maintained summary. */
 
 /* Q40. Add a researcher to a project with validation and return codes. */
 CREATE OR ALTER PROCEDURE dbo.AddResearcherToProject
