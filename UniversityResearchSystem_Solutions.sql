@@ -78,10 +78,9 @@ ORDER BY LastName, FirstName, Id
 OFFSET 10 ROWS FETCH NEXT 10 ROWS ONLY;
 GO
 
-/* Q8. TOP (3) and OFFSET 0 / FETCH NEXT 3 return the same first three rows
-   for the same ORDER BY. Tied LastName values have no guaranteed relative
-   order unless a unique tie-breaker is added. OFFSET-FETCH supports page
-   numbers / page sizes and is convenient for pagination; TOP supports
+/* Q8. Both statements request the first three rows in LastName order, but
+   tied last names can make the selected rows differ unless a unique tie-breaker
+   is added. OFFSET-FETCH supports page numbers/page sizes; TOP also supports
    PERCENT and WITH TIES and works in more query contexts. */
 
 /* Q9. Unique index within each building, oldest birth date first. */
@@ -126,8 +125,8 @@ FROM PublicationCounts
 ORDER BY GroupNumber, PublicationCount DESC, ResearcherId;
 GO
 
-/* Q13. Logical clause order: FROM/JOIN, WHERE, GROUP BY, HAVING, SELECT,
-   ORDER BY, then OFFSET-FETCH (or TOP row limiting in the SELECT phase). */
+/* Q13. Logical processing order: FROM/JOIN, WHERE, GROUP BY, HAVING, SELECT,
+   ORDER BY, then TOP or OFFSET-FETCH row limiting. */
 
 /* Q14. Aggregate aliases are unavailable to WHERE and aggregates are filtered
    with HAVING, after grouping. */
@@ -260,16 +259,7 @@ FROM dbo.ResearchProject
 WHERE Budget < (SELECT MAX(Budget) FROM dbo.ResearchProject);
 GO
 
-/* Q29. One contact column; UNION ALL retains duplicate values and source rows. */
-SELECT Email AS [Contact Information]
-FROM dbo.Researcher
-UNION ALL
-SELECT FundingAgency
-FROM dbo.Grants
-ORDER BY [Contact Information];
-GO
-
-/* Q30. Researchers working on a project but with no authored publications. */
+/* Q29. Researchers involved in projects who have authored no publications. */
 SELECT r.Id AS ResearcherId, r.FirstName, r.LastName
 FROM dbo.Researcher AS r
 WHERE EXISTS (SELECT 1 FROM dbo.WorksOn AS w WHERE w.ResearcherId = r.Id)
@@ -277,7 +267,7 @@ WHERE EXISTS (SELECT 1 FROM dbo.WorksOn AS w WHERE w.ResearcherId = r.Id)
 ORDER BY r.LastName, r.Id;
 GO
 
-/* Q31. Researchers who supervise and lead one or more projects. */
+/* Q30. Researchers who supervise others and lead one or more projects. */
 SELECT r.Id AS ResearcherId,
        CONCAT_WS(' ', r.FirstName, r.MiddleName, r.LastName) AS ResearcherName
 FROM dbo.Researcher AS r
@@ -286,45 +276,7 @@ WHERE EXISTS (SELECT 1 FROM dbo.Supervises AS s WHERE s.SupervisorId = r.Id)
 ORDER BY r.LastName, r.Id;
 GO
 
-/* Q32. Weekly hours across projects, including researchers with no assignments. */
-WITH ResearcherHours AS
-(
-    SELECT r.Id AS ResearcherId, r.FirstName, r.LastName,
-           COALESCE(SUM(w.HoursPerWeek), 0) AS TotalHoursPerWeek
-    FROM dbo.Researcher AS r
-    LEFT JOIN dbo.WorksOn AS w ON w.ResearcherId = r.Id
-    GROUP BY r.Id, r.FirstName, r.LastName
-)
-SELECT ResearcherId, FirstName, LastName, TotalHoursPerWeek
-FROM ResearcherHours
-WHERE TotalHoursPerWeek > 40
-ORDER BY TotalHoursPerWeek DESC, ResearcherId;
-GO
-
-/* Q33. Multiple CTEs: led project budgets and authorship counts. */
-WITH LeadBudgets AS
-(
-    SELECT LeaderId AS ResearcherId, SUM(Budget) AS TotalBudget
-    FROM dbo.ResearchProject
-    GROUP BY LeaderId
-),
-PublicationCounts AS
-(
-    SELECT ResearcherId, COUNT(*) AS PublicationCount
-    FROM dbo.Publishes
-    GROUP BY ResearcherId
-)
-SELECT r.Id AS ResearcherId,
-       CONCAT_WS(' ', r.FirstName, r.MiddleName, r.LastName) AS ResearcherName,
-       lb.TotalBudget, pc.PublicationCount
-FROM LeadBudgets AS lb
-JOIN PublicationCounts AS pc ON pc.ResearcherId = lb.ResearcherId
-JOIN dbo.Researcher AS r ON r.Id = lb.ResearcherId
-WHERE lb.TotalBudget > 100000 AND pc.PublicationCount >= 3
-ORDER BY lb.TotalBudget DESC, r.Id;
-GO
-
-/* Function task 1. Days active for a project through EndDate or today. */
+/* Q31. Function returning project days from StartDate to EndDate or today. */
 CREATE OR ALTER FUNCTION dbo.ufn_ProjectActiveDays
 (
     @ProjectId varchar(10)
@@ -340,7 +292,7 @@ BEGIN
 END;
 GO
 
-/* Function task 2. Projects and this researcher's role/hours. */
+/* Q32. Inline table-valued function: projects, role, and weekly hours. */
 CREATE OR ALTER FUNCTION dbo.ufn_ResearcherProjects
 (
     @ResearcherId varchar(10)
@@ -356,7 +308,7 @@ RETURN
 );
 GO
 
-/* Function task 3. Aggregate summary; a multi-statement TVF suits the required
+/* Q33. Aggregate summary; a multi-statement TVF suits the required
    output-table construction / branching use cases, but an inline TVF is
    preferable for simple single-query logic because it can be optimized with
    the caller (MSTVF may have weaker cardinality estimates). */
@@ -388,20 +340,21 @@ BEGIN
 END;
 GO
 
-/* Q37. Search index on project status and start date. */
+/* Q34. Search index on project status and start date. */
 IF NOT EXISTS
    (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.ResearchProject')
      AND name = N'IX_ResearchProject_Status_StartDate')
     CREATE NONCLUSTERED INDEX IX_ResearchProject_Status_StartDate
-        ON dbo.ResearchProject (Status, StartDate);
+        ON dbo.ResearchProject (Status, StartDate DESC)
+        INCLUDE (Id, Title);
 GO
-/* A table can have one clustered index (or be a heap). A clustered index
-   stores the table rows in key order; a nonclustered index stores a separate
-   key/row-locator structure. Adding a clustered index to a heap reorganizes
-   the rows and rebuilds nonclustered row locators from heap RIDs to clustered
-   keys; nonclustered indexes remain but may be rebuilt. */
+/* Q35. A table can have one clustered index (or be a heap). A clustered
+   index stores the table rows in key order; a nonclustered index stores a
+   separate key/row-locator structure. Adding a clustered index to a heap
+   reorganizes the rows and rebuilds nonclustered row locators from heap RIDs
+   to clustered keys; the existing nonclustered indexes remain. */
 
-/* Q38. Cover Email searches that return FirstName and LastName. */
+/* Q36. Cover Email searches that return FirstName and LastName. */
 IF NOT EXISTS
    (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.Researcher')
      AND name = N'IX_Researcher_Email_Cover')
@@ -412,7 +365,7 @@ GO
 /* A covering index contains all search and output columns, so SQL Server can
    answer this lookup from the index without a base-table key lookup. */
 
-/* Q39. Active-project summary. */
+/* Q37. Active-project summary. */
 CREATE OR ALTER VIEW dbo.ActiveProjectSummary
 AS
     SELECT p.Id AS ProjectId, p.Title AS ProjectTitle,
@@ -432,7 +385,7 @@ AS
     WHERE p.Status = 'Active';
 GO
 
-/* Q40. Indexed publication-count view. Indexed views cannot use an outer join,
+/* Q38. Indexed publication-count view. Indexed views cannot use an outer join,
    so researchers with zero publications do not have a row in this view. SQL
    Server also disallows a select-list expression over grouped columns here;
    the deterministic persisted name column lets the indexed view group by and
@@ -465,7 +418,7 @@ IF NOT EXISTS
     CREATE UNIQUE CLUSTERED INDEX UX_ResearcherPublicationStats
         ON dbo.ResearcherPublicationStats (ResearcherId);
 GO
-/* Indexed-view requirements: schema binding; two-part base object names; a
+/* Q39. Indexed-view requirements: schema binding; two-part base object names; a
    unique clustered index first; COUNT_BIG for grouped aggregates; deterministic
    expressions; required SET options; and supported view syntax (no outer
    joins, TOP, DISTINCT, subqueries, or UNION). It stores and maintains results,
@@ -474,7 +427,7 @@ GO
    acceptable; use a table when independently managed / refreshed data is
    required. */
 
-/* Q41. Add a researcher to a project with validation and return codes. */
+/* Q40. Add a researcher to a project with validation and return codes. */
 CREATE OR ALTER PROCEDURE dbo.AddResearcherToProject
     @ResearcherId varchar(10),
     @ProjectId varchar(10),
@@ -512,7 +465,7 @@ BEGIN
 END;
 GO
 
-/* Q42. Change Pending to Active only if assigned researchers and a grant exist. */
+/* Q41. Change Pending to Active only if assigned researchers and a grant exist. */
 CREATE OR ALTER PROCEDURE dbo.UpdateProjectStatus
     @ProjectId varchar(10)
 AS
@@ -539,7 +492,7 @@ BEGIN
 END;
 GO
 
-/* Q43. Output counts for a researcher. */
+/* Q42. Output counts for a researcher. */
 CREATE OR ALTER PROCEDURE dbo.GetResearcherWorkSummary
     @ResearcherId varchar(10),
     @TotalProjects int OUTPUT,
@@ -555,7 +508,7 @@ BEGIN
 END;
 GO
 
-/* Q44. Reject an insert that leaves any affected researcher on > 5 projects. */
+/* Q43. Reject an insert that leaves any affected researcher on > 5 projects. */
 CREATE OR ALTER TRIGGER dbo.trg_WorksOn_MaxFiveProjects
 ON dbo.WorksOn
 AFTER INSERT
@@ -575,7 +528,7 @@ BEGIN
 END;
 GO
 
-/* Q45. AFTER trigger: evaluate the committed EndDate and then update Status. */
+/* Q44. AFTER trigger: evaluate the committed EndDate and then update Status. */
 CREATE OR ALTER TRIGGER dbo.trg_ResearchProject_CompletePastEndDate
 ON dbo.ResearchProject
 AFTER INSERT, UPDATE
@@ -595,7 +548,7 @@ GO
 /* AFTER is appropriate because the row must first be written so the trigger
    can inspect its actual EndDate; the second UPDATE marks it completed. */
 
-/* Q46. Audit old/new amounts for every Grants row updated. */
+/* Q45. Audit old/new amounts for every Grants row updated. */
 IF OBJECT_ID(N'dbo.GrantAudit', N'U') IS NULL
 BEGIN
     CREATE TABLE dbo.GrantAudit
@@ -623,7 +576,7 @@ BEGIN
 END;
 GO
 
-/* Q47. Atomic project + leader assignment + grant allocation.
+/* Q46. Atomic project + leader assignment + grant allocation.
    Execute by calling the procedure with valid, unused IDs and an existing grant. */
 CREATE OR ALTER PROCEDURE dbo.CreateFundedProject
     @ProjectId varchar(10),
@@ -667,12 +620,42 @@ BEGIN
     END CATCH;
 END;
 GO
-/* Q48. ACID: Atomicity means all three inserts above commit or none do;
+/* Q47. ACID: Atomicity means all three inserts above commit or none do;
    Consistency preserves foreign keys and project rules; Isolation prevents
    another session observing a partially-created project; Durability means a
    committed project, assignment, and funding allocation survive a restart. */
 
-/* Q49. For repeated Top-10 cited publications with authors:
+/* Q48. IN and EXISTS are commonly optimized as equivalent semi-joins. Neither
+   is universally faster; indexes, uniqueness, selectivity, row counts,
+   statistics, and the chosen execution plan determine performance. */
+-- Query A
+SELECT r.*
+FROM dbo.Researcher AS r
+WHERE r.Id IN
+      (SELECT w.ResearcherId FROM dbo.WorksOn AS w WHERE w.ProjectId = 'P001');
+GO
+-- Query B
+SELECT r.*
+FROM dbo.Researcher AS r
+WHERE EXISTS (SELECT 1 FROM dbo.WorksOn AS w
+              WHERE w.ResearcherId = r.Id AND w.ProjectId = 'P001');
+GO
+/* Q49. Useful indexes / checks for the slow active-project query:
+   1) ResearchProject(Status, StartDate DESC) INCLUDE (Id, Title).
+   2) WorksOn(ProjectId, ResearcherId) to support the project-to-team join.
+   3) Researcher.Id is already the clustered primary key, so its row lookup
+      returns FirstName/LastName without another covering index.
+   4) Refresh statistics and inspect the actual execution plan / logical reads.
+   The WHERE predicate on p.Status does not remove projects without a team, so
+   retain LEFT JOIN if those projects must remain in the output. */
+IF NOT EXISTS
+   (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.WorksOn')
+     AND name = N'IX_WorksOn_ProjectId_ResearcherId')
+    CREATE NONCLUSTERED INDEX IX_WorksOn_ProjectId_ResearcherId
+        ON dbo.WorksOn (ProjectId, ResearcherId);
+GO
+
+/* Q50. For repeated Top-10 cited publications with authors:
    A) Repeated query: simplest/fresh data, but duplicated text and no shared
       interface.
    B) View: reusable and current, but does not store results; ORDER BY/TOP
@@ -716,85 +699,4 @@ IF NOT EXISTS
      AND name = N'IX_Publishes_PublicationId')
     CREATE NONCLUSTERED INDEX IX_Publishes_PublicationId
         ON dbo.Publishes (PublicationId, ResearcherId);
-GO
-
-/* Q51. Grant object-control on each table to the manager; grant the requested
-   limited rights to the assistant; allow view reads and deny table reads to
-   the analyst. These statements assume the three database users already exist. */
-DECLARE @TableName sysname, @Sql nvarchar(max);
-DECLARE TablePermissions CURSOR LOCAL FAST_FORWARD FOR
-    SELECT QUOTENAME(s.name) + N'.' + QUOTENAME(t.name)
-    FROM sys.tables AS t
-    JOIN sys.schemas AS s ON s.schema_id = t.schema_id
-    WHERE s.name = N'dbo' AND t.is_ms_shipped = 0;
-OPEN TablePermissions;
-FETCH NEXT FROM TablePermissions INTO @TableName;
-WHILE @@FETCH_STATUS = 0
-BEGIN
-    SET @Sql = N'GRANT CONTROL ON OBJECT::' + @TableName + N' TO [ResearchManager];';
-    EXEC sys.sp_executesql @Sql;
-    SET @Sql = N'DENY SELECT ON OBJECT::' + @TableName + N' TO [DataAnalyst];';
-    EXEC sys.sp_executesql @Sql;
-    FETCH NEXT FROM TablePermissions INTO @TableName;
-END;
-CLOSE TablePermissions;
-DEALLOCATE TablePermissions;
-GO
-GRANT SELECT, INSERT ON OBJECT::dbo.Researcher TO [ResearchAssistant];
-GRANT SELECT, INSERT ON OBJECT::dbo.Publication TO [ResearchAssistant];
-GO
-DECLARE @ViewName sysname, @ViewSql nvarchar(max);
-DECLARE ViewPermissions CURSOR LOCAL FAST_FORWARD FOR
-    SELECT QUOTENAME(s.name) + N'.' + QUOTENAME(v.name)
-    FROM sys.views AS v
-    JOIN sys.schemas AS s ON s.schema_id = v.schema_id
-    WHERE s.name = N'dbo' AND v.is_ms_shipped = 0;
-OPEN ViewPermissions;
-FETCH NEXT FROM ViewPermissions INTO @ViewName;
-WHILE @@FETCH_STATUS = 0
-BEGIN
-    SET @ViewSql = N'GRANT SELECT ON OBJECT::' + @ViewName + N' TO [DataAnalyst];';
-    EXEC sys.sp_executesql @ViewSql;
-    FETCH NEXT FROM ViewPermissions INTO @ViewName;
-END;
-CLOSE ViewPermissions;
-DEALLOCATE ViewPermissions;
-GO
-
-/* Q52(a). Revoke direct INSERT/UPDATE grants from the assistant on Researcher. */
-REVOKE INSERT, UPDATE ON OBJECT::dbo.Researcher FROM [ResearchAssistant];
-GO
-/* GRANT adds a permission; REVOKE removes that grant/deny and can expose an
-   inherited permission; DENY explicitly blocks a permission and normally
-   overrides grants. The revocation does not remove permissions inherited from
-   roles or other principals. */
-
-/* Q52(b). IN and EXISTS are commonly optimized as equivalent semi-joins.
-   Neither is universally faster; indexes, uniqueness, selectivity, row
-   counts, statistics, and the chosen execution plan determine performance. */
-SELECT r.*
-FROM dbo.Researcher AS r
-WHERE EXISTS (SELECT 1 FROM dbo.WorksOn AS w
-              WHERE w.ResearcherId = r.Id AND w.ProjectId = 'P001');
-GO
-/* Q52(c). Useful indexes / checks for the slow active-project query:
-   1) ResearchProject(Status, StartDate DESC) INCLUDE (Id, Title).
-   2) WorksOn(ProjectId, ResearcherId) to support the project-to-team join.
-   3) Researcher.Id is already the clustered primary key, so its row lookup
-      returns FirstName/LastName without another covering index.
-   4) Refresh statistics and inspect the actual execution plan / logical reads.
-   The WHERE predicate on p.Status does not remove projects without a team, so
-   retain LEFT JOIN if those projects must remain in the output. */
-IF NOT EXISTS
-   (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.ResearchProject')
-     AND name = N'IX_ResearchProject_Active_StartDate')
-    CREATE NONCLUSTERED INDEX IX_ResearchProject_Active_StartDate
-        ON dbo.ResearchProject (Status, StartDate DESC)
-        INCLUDE (Id, Title);
-GO
-IF NOT EXISTS
-   (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.WorksOn')
-     AND name = N'IX_WorksOn_ProjectId_ResearcherId')
-    CREATE NONCLUSTERED INDEX IX_WorksOn_ProjectId_ResearcherId
-        ON dbo.WorksOn (ProjectId, ResearcherId);
 GO

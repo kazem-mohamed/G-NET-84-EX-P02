@@ -15,10 +15,10 @@ The full schema uses Researcher.Id, ResearchProject.Id, and Publication.Id as ke
 
 ## Running the solution
 
-Run the SQL file in the restored assignment database in SQL Server Management Studio or with sqlcmd -d UniversityResearchSystem_Exam. The query sections return their requested result sets. The DDL sections create the requested functions, indexes, view, indexed view, procedures, triggers, and permissions.
+Run the SQL file in the restored assignment database in SQL Server Management Studio or with sqlcmd -d UniversityResearchSystem_Exam. The query sections return their requested result sets. The DDL sections create the requested functions, indexes, views, procedures, and triggers.
 
-The permissions section assumes database users ResearchManager, ResearchAssistant, and DataAnalyst already exist, as the questions specify users rather than asking to create them. CreateFundedProject is parameterized and not invoked by the script because it inserts a project, assignment, and funding allocation.
+CreateFundedProject is parameterized and not invoked by the script because it inserts a project, assignment, and funding allocation.
 
-## Source-document gaps
+## Numbering check
 
-The PDF extraction repeats several page blocks and has inconsistent question labels. The unnumbered prompt about researchers on projects with no publications is treated as Q30, and the following supervise-and-lead prompt as Q31, following their order and later numbering. The PDF contains a Question 50 (4 Points) heading but no readable prompt beneath it; that missing prompt cannot be answered from the supplied copy. Other distinct tasks whose numbering is unclear are included in the SQL file in their visible order.
+The PDF visibly contains questions 1 through 50. The SQL answer sections follow the printed numbering, including Q29 (researchers on projects with no publications), Q30 (researchers who supervise and lead), Q31-Q33 (function tasks), and Q50 (the top-10 publications approaches). Some hidden PDF text layers duplicate blocks and show phantom numbering; those artifacts are not used as assignment questions.
